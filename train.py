@@ -7,6 +7,13 @@ from components.dataset import train_dataloaded
 from tqdm import tqdm
 import os
 import torchvision.utils as vutils
+import gc
+
+gc.collect()
+torch.cuda.empty_cache()
+torch.cuda.ipc_collect()
+
+
 output_path="content"
 criterion = nn.CrossEntropyLoss()
 model=Tintelligence()
@@ -32,7 +39,7 @@ def save_generated_images(model, epoch, device, output_path, num_samples=16):
         )
     model.train()
 
-def train(model,trainloader:torch.utils.data.DataLoader,epochs:int):
+def train(model,trainloader:torch.utils.data.DataLoader,epochs:int,grad_accum=4):
     model.to(device)
     model.train()
     for epoch in range(epochs):
@@ -40,25 +47,28 @@ def train(model,trainloader:torch.utils.data.DataLoader,epochs:int):
         total=0
         progress_bar = tqdm(trainloader, total=len(trainloader), 
                             desc=f"Epoch {epoch+1}/{epochs}", leave=False)
-        for gray,target in progress_bar:
+        for i,(gray,target) in enumerate(progress_bar):
             
             gray, target = gray.to(device), target.to(device)
 
             # zero the parameter gradients
-            optimizer.zero_grad()
+            
             with torch.cuda.amp.autocast():
+                
                 outputs = model(gray)
+                
                 loss = criterion(outputs, target)
-
-            scaler.scale(loss).backward()
-            scaler.step(optimizer)
-            scaler.update()
-            total += target.size(0)
             running_loss += loss.item()
-
+            loss=loss/grad_accum
+            scaler.scale(loss).backward()
+            if (i + 1) % grad_accum == 0 or (i + 1) == len(trainloader):
+                scaler.step(optimizer)
+                scaler.update()
+                optimizer.zero_grad()
+            total += target.size(0)
             progress_bar.set_postfix(loss=f"{running_loss / (total / 1):.4f}")
         print('Loss: {}'.format(running_loss/len(trainloader)))
-        save_generated_images(model, epoch, device, output_path, 16)
+        #save_generated_images(model, epoch, device, output_path, 16)
     print('Finished Training')
 
 train(model,train_dataloaded,100)
